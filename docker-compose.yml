@@ -1,0 +1,168 @@
+version: "3"
+services:
+  zookeeper:
+    container_name: zookeeper
+    restart: unless-stopped
+    hostname: zookeeper
+    build:
+      context: .
+      dockerfile: ./localstack/kafka/zookeeper/Dockerfile
+    ports:
+      - '2181:2181'
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    container_name: kafka
+    hostname: kafka
+    build:
+      context: .
+      dockerfile: ./localstack/kafka/Dockerfile
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: LISTENER_DOCKER_INTERNAL://kafka:19092,LISTENER_DOCKER_EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LISTENER_DOCKER_INTERNAL:PLAINTEXT,LISTENER_DOCKER_EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: LISTENER_DOCKER_INTERNAL
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_BROKER_ID: 1
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - '9092:9092'
+    depends_on:
+      - zookeeper
+  kafka-schema-registry:
+    image: confluentinc/cp-schema-registry:6.2.2
+    hostname: kafka-schema-registry
+    ports:
+      - "9081:9081"
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:19092
+      SCHEMA_REGISTRY_HOST_NAME: kafka-schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:9081
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      SCHEMA_REGISTRY_ACCESS_CONTROL_ALLOW_METHODS: "GET,POST,PUT,OPTIONS"
+      SCHEMA_REGISTRY_ACCESS_CONTROL_ALLOW_ORIGIN: "*"
+    depends_on:
+      - zookeeper
+      - kafka
+  kowl:
+    profiles:
+      - kowl
+      - full
+    image: quay.io/cloudhut/kowl:master
+    restart: on-failure
+    ports:
+      - "9090:8080"
+    environment:
+      KAFKA_BROKERS: "kafka:19092"
+      KAFKA_SCHEMAREGISTRY_ENABLED: "true"
+      KAFKA_SCHEMAREGISTRY_URLS: http://kafka-schema-registry:9081
+    depends_on:
+      - kafka
+      - kafka-schema-registry
+
+  kafka-schema-registry-ui:
+    profiles:
+      - full
+    image: landoop/schema-registry-ui:latest
+    hostname: kafka-schema-registry-ui
+    ports:
+      - "8005:8000"
+    environment:
+      SCHEMAREGISTRY_URL: http://localhost:9081
+    depends_on:
+      - zookeeper
+      - kafka
+      - kafka-schema-registry
+
+  kafka-rest-proxy:
+    profiles:
+      - full
+    image: confluentinc/cp-kafka-rest:6.2.2
+    hostname: kafka-rest-proxy
+    ports:
+      - "9082:9082"
+    environment:
+      KAFKA_REST_LISTENERS: http://0.0.0.0:9082/
+      KAFKA_REST_SCHEMA_REGISTRY_URL: http://kafka-schema-registry:9081/
+      KAFKA_REST_HOST_NAME: kafka-rest-proxy
+      KAFKA_REST_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:19092
+    depends_on:
+      - zookeeper
+      - kafka
+      - kafka-schema-registry
+
+  kafka-connect:
+    profiles:
+      - full
+    image: confluentinc/cp-kafka-connect:6.2.2
+    hostname: kafka-connect
+    ports:
+      - "9083:9083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:19092"
+      CONNECT_REST_PORT: 9083
+      CONNECT_GROUP_ID: compose-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: docker-connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: docker-connect-status
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: 'http://kafka-schema-registry:9081'
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://kafka-schema-registry:9081'
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+      CONNECT_LOG4J_LOGGERS: "org.apache.kafka.connect.runtime.rest=WARN,org.reflections=ERROR"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_PLUGIN_PATH: '/usr/share/java,/etc/kafka-connect/jars'
+    depends_on:
+      - zookeeper
+      - kafka
+      - kafka-schema-registry
+      - kafka-rest-proxy
+
+  ksqldb-server:
+    profiles:
+      - full
+    image: confluentinc/cp-ksqldb-server:5.5.1
+    hostname: ksqldb-server
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:19092
+      KSQL_LISTENERS: http://0.0.0.0:8088/
+      KSQL_KSQL_SERVICE_ID: ksqldb-server_
+    depends_on:
+      - zookeeper
+      - kafka
+
+  redis:
+    image: redis:alpine3.13
+    ports:
+      - "6379:6379"
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.2.2
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - kafka
+      - kafka-schema-registry
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'kafka:19092'
+      #      CONTROL_CENTER_CONNECT_CONNECT-DEFAULT_CLUSTER: 'connect:8083'
+      #      CONTROL_CENTER_KSQL_KSQLDB1_URL: "http://ksqldb-server:8088"
+      #      CONTROL_CENTER_KSQL_KSQLDB1_ADVERTISED_URL: "http://localhost:8088"
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://kafka-schema-registry:9081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021

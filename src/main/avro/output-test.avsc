@@ -1,0 +1,25 @@
+{
+  "type": "record",
+  "namespace": "br.com.confluence.events",
+  "name": "Output",
+  "fields": [
+    {
+      "name": "id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      }
+    },
+    {
+      "name": "name",
+      "type": "string"
+    },
+    {
+      "name": "date",
+      "type": {
+        "type": "string",
+        "logicalType": "timestamp-millis"
+      }
+    }
+  ]
+}

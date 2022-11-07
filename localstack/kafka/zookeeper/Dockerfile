@@ -1,0 +1,7 @@
+FROM zookeeper:3.4.9
+
+#ENV ZOO_MY_ID=1
+#ENV ZOO_PORT=2181
+#ENV ZOO_SERVERS='server.1=zookeeper:2888:3888'
+
+EXPOSE 2181/tcp
